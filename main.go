@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync/atomic"
+	"strings"
 )
 
 type apiConfig struct {
@@ -76,7 +77,7 @@ func (cfg *apiConfig) valid_chirp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest) // 400 status code
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write(res)
 		return
 	}
@@ -92,6 +93,56 @@ func (cfg *apiConfig) valid_chirp(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write(res)
 }
+
+func respondWithError (w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(code)
+    json.NewEncoder(w).Encode(payload)
+}
+
+func cleanProfanity (w http.ResponseWriter, body requestData{}) {
+	split := strings.Split(body.Body, " ")
+	for i, word := range split {
+		if strings.ToLower(word) == "kerfluffle" || strings.ToLower(word) == "sharbert" || strings.ToLower(word) == "fornax" {
+			split[i] = "****"
+		}
+	}
+	res := strings.Join(split, " ")
+	encoder := json.NewEncoder(w)
+	err := encoder.Encode(res)
+	w.WriteHeader(code)
+	w.Write(res)
+}
+
+func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
+    var requestData struct {
+        Body string `json:"body"`
+    }
+    
+    err := json.NewDecoder(r.Body).Decode(&requestData)
+    if err != nil {
+        respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+        return
+    }
+
+    if len(requestData.Body) > 140 {
+        respondWithError(w, http.StatusBadRequest, "Chirp is too long")
+        return
+    }
+
+    cleanedBody := cleanProfanity(requestData.Body)
+
+    respondWithJSON(w, http.StatusOK, map[string]string{
+        "cleaned_body": cleanedBody,
+    })
+}
+
 
 func main() {
 	apiCfg := &apiConfig{}

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/smugii23/chirpy/internal/auth"
 	"github.com/smugii23/chirpy/internal/database"
 )
 
@@ -171,7 +172,8 @@ func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 	var reqData struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&reqData)
@@ -179,7 +181,16 @@ func (cfg *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	user, err := cfg.DB.CreateUser(r.Context(), reqData.Email)
+	hashedPass, err := auth.HashPassword(reqData.Password)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	params := database.CreateUserParams{
+		Email:          reqData.Email,
+		HashedPassword: hashedPass,
+	}
+	user, err := cfg.DB.CreateUser(r.Context(), params)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -357,6 +368,53 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonData)
 }
 
+func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
+	type request struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	req := request{}
+	err := decoder.Decode(&req)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	user, err := cfg.DB.LookupUser(r.Context(), req.Email)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Incorrect email or password"}`))
+		return
+	}
+	type users struct {
+		ID             uuid.UUID `json:"id"`
+		CreatedAt      time.Time `json:"created_at"`
+		UpdatedAt      time.Time `json:"updated_at"`
+		Email          string    `json:"email"`
+		HashedPassword string    `json:"hashed_pass"`
+	}
+	lookup := users{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	err = auth.CheckPasswordHash(req.Password, lookup.HashedPassword)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "Incorrect email or password"}`))
+		return
+	}
+	jsonData, err := json.Marshal(lookup)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonData)
+}
+
 func main() {
 	godotenv.Load()
 	platform := os.Getenv("PLATFORM")
@@ -385,6 +443,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.chirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
+	mux.HandleFunc("POST /api/login", apiCfg.authenticateUser)
 	server.ListenAndServe()
 }
 

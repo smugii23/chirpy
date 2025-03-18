@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	DB             *database.Queries
 	Platform       string
+	Secret         string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -229,10 +230,22 @@ func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, r *http.Request) {
 	type errorResp struct {
 		Error string `json:"error"`
 	}
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Authentication required"})
+		return
+	}
+	userID, err := auth.ValidateJWT(tokenString, cfg.Secret)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Authentication required"})
+		return
+	}
 
 	decoder := json.NewDecoder(r.Body)
 	tweet := chirp{}
-	err := decoder.Decode(&tweet)
+	err = decoder.Decode(&tweet)
 	if err != nil {
 		resp := errorResp{
 			Error: "Something went wrong",
@@ -263,7 +276,7 @@ func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	params := database.AddChirpsParams{
 		Body:   tweet.Body,
-		UserID: uuid.MustParse(tweet.UserID),
+		UserID: userID,
 	}
 	chirpy, err := cfg.DB.AddChirps(r.Context(), params)
 	if err != nil {
@@ -370,8 +383,9 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 	type request struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds *int   `json:"expires_in_seconds"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	req := request{}
@@ -386,24 +400,36 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"error": "Incorrect email or password"}`))
 		return
 	}
+	err = auth.CheckPasswordHash(req.Password, user.HashedPassword)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Incorrect email or password"}`))
+		return
+	}
+	expiresIn := 3600
+	if req.ExpiresInSeconds != nil {
+		if *req.ExpiresInSeconds > 0 && *req.ExpiresInSeconds <= 3600 {
+			expiresIn = *req.ExpiresInSeconds
+		}
+	}
+	token, err := auth.MakeJWT(user.ID, cfg.Secret, time.Duration(expiresIn)*time.Second)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	type users struct {
-		ID             uuid.UUID `json:"id"`
-		CreatedAt      time.Time `json:"created_at"`
-		UpdatedAt      time.Time `json:"updated_at"`
-		Email          string    `json:"email"`
-		HashedPassword string    `json:"hashed_pass"`
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+		Token     string    `json:"token"`
 	}
 	lookup := users{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
-	}
-	err = auth.CheckPasswordHash(req.Password, lookup.HashedPassword)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error": "Incorrect email or password"}`))
-		return
+		Token:     token,
 	}
 	jsonData, err := json.Marshal(lookup)
 	if err != nil {
@@ -417,6 +443,7 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	godotenv.Load()
+	secret := os.Getenv("SECRET")
 	platform := os.Getenv("PLATFORM")
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
@@ -425,7 +452,8 @@ func main() {
 	}
 	dbQueries := database.New(db)
 	apiCfg := &apiConfig{DB: dbQueries,
-		Platform: platform}
+		Platform: platform,
+		Secret:   secret}
 	apiCfg.fileserverHits.Store(0)
 	mux := http.NewServeMux()
 	server := &http.Server{

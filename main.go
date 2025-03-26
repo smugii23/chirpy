@@ -383,9 +383,8 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 	type request struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds *int   `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	req := request{}
@@ -407,29 +406,31 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiresIn := 3600
-	if req.ExpiresInSeconds != nil {
-		if *req.ExpiresInSeconds > 0 && *req.ExpiresInSeconds <= 3600 {
-			expiresIn = *req.ExpiresInSeconds
-		}
-	}
 	token, err := auth.MakeJWT(user.ID, cfg.Secret, time.Duration(expiresIn)*time.Second)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	refresh_token, err := auth.MakeRefreshToken()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	type users struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-		Token     string    `json:"token"`
+		ID           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
 	}
 	lookup := users{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     token,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: refresh_token,
 	}
 	jsonData, err := json.Marshal(lookup)
 	if err != nil {

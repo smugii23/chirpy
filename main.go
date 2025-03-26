@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -416,6 +417,20 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	refresh_params := database.AddRefreshTokenParams{
+		Token:     refresh_token,
+		CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		UpdatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		UserID:    uuid.NullUUID{UUID: user.ID, Valid: true},
+		ExpiresAt: sql.NullTime{Time: time.Now().Add(60 * 24 * time.Hour), Valid: true},
+		RevokedAt: sql.NullTime{Valid: false},
+	}
+	err = cfg.DB.AddRefreshToken(r.Context(), refresh_params)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "Failed to add refresh token"}`))
+		return
+	}
 	type users struct {
 		ID           uuid.UUID `json:"id"`
 		CreatedAt    time.Time `json:"created_at"`
@@ -440,6 +455,58 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonData)
+}
+
+func extractToken(authHeader string) (string, error) {
+	const bearerPrefix = "Bearer "
+	if len(authHeader) < len(bearerPrefix) || authHeader[:len(bearerPrefix)] != bearerPrefix {
+		return "", fmt.Errorf("invalid authorization header")
+	}
+	return authHeader[len(bearerPrefix):], nil
+}
+
+func (cfg *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Authorization header missing"}`))
+		return
+	}
+
+	token, err := extractToken(authHeader)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Invalid authorization header"}`))
+		return
+	}
+
+	userID, err := cfg.DB.GetRefreshToken(r.Context(), token)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "Failed to retrieve refresh token"}`))
+		return
+	}
+	if !userID.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	newToken, err := auth.MakeJWT(userID.UUID, cfg.Secret, time.Hour)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	response := map[string]string{
+		"token": newToken,
+	}
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "Failed to generate response"}`))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
+	return
 }
 
 func main() {
@@ -473,6 +540,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.authenticateUser)
+	mux.HandleFunc("POST /api/refresh", apiCfg.refreshToken)
 	server.ListenAndServe()
 }
 

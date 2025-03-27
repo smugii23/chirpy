@@ -530,7 +530,7 @@ func (cfg *apiConfig) revokeRefreshToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-	return
+
 }
 
 func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -590,6 +590,52 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Authorization header missing"}`))
+		return
+	}
+	token, err := extractToken(authHeader)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Invalid authorization header"}`))
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.Secret)
+	if err != nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	chirpID := r.PathValue("chirpID")
+	uuidChirpID, err := uuid.Parse(chirpID)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "Invalid chirp ID format"}`))
+		return
+	}
+	chirp, err := cfg.DB.GetChirp(r.Context(), uuidChirpID)
+	if err != nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	if chirp.ID == uuid.Nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if chirp.UserID != userID {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	err = cfg.DB.DeleteChirp(r.Context(), uuidChirpID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func main() {
 	godotenv.Load()
 	secret := os.Getenv("SECRET")
@@ -624,6 +670,7 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", apiCfg.refreshToken)
 	mux.HandleFunc("POST /api/revoke", apiCfg.revokeRefreshToken)
 	mux.HandleFunc("PUT /api/users", apiCfg.updateUser)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirp)
 	server.ListenAndServe()
 }
 

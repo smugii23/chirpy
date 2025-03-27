@@ -482,7 +482,7 @@ func (cfg *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := cfg.DB.GetRefreshToken(r.Context(), token)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"error": "Failed to retrieve refresh token"}`))
 		return
 	}
@@ -506,6 +506,30 @@ func (cfg *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(responseJSON)
+}
+
+func (cfg *apiConfig) revokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Authorization header missing"}`))
+		return
+	}
+
+	token, err := extractToken(authHeader)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error": "Invalid authorization header"}`))
+		return
+	}
+
+	err = cfg.DB.RevokeRefreshToken(r.Context(), token)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error": "Failed to revoke refresh token"}`))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 	return
 }
 
@@ -541,6 +565,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.authenticateUser)
 	mux.HandleFunc("POST /api/refresh", apiCfg.refreshToken)
+	mux.HandleFunc("POST /api/revoke", apiCfg.revokeRefreshToken)
 	server.ListenAndServe()
 }
 

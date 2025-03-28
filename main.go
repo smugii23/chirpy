@@ -25,6 +25,7 @@ type apiConfig struct {
 	DB             *database.Queries
 	Platform       string
 	Secret         string
+	PolkaKey       string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -669,6 +670,15 @@ func (cfg *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"error": "Invalid user ID format"}`))
 		return
 	}
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if apiKey != cfg.PolkaKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	_, err = cfg.DB.MakeUserRed(r.Context(), userUUID)
 	if errors.Is(err, sql.ErrNoRows) {
 		w.WriteHeader(http.StatusNotFound)
@@ -686,6 +696,7 @@ func main() {
 	secret := os.Getenv("SECRET")
 	platform := os.Getenv("PLATFORM")
 	dbURL := os.Getenv("DB_URL")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal(err)
@@ -693,7 +704,8 @@ func main() {
 	dbQueries := database.New(db)
 	apiCfg := &apiConfig{DB: dbQueries,
 		Platform: platform,
-		Secret:   secret}
+		Secret:   secret,
+		PolkaKey: polkaKey}
 	apiCfg.fileserverHits.Store(0)
 	mux := http.NewServeMux()
 	server := &http.Server{

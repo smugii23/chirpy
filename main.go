@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -320,11 +321,35 @@ func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request
 		Body      string    `json:"body"`
 		UserID    string    `json:"user_id"`
 	}
-	chirps, err := cfg.DB.GetAllChirps(r.Context())
+	sortOrder := r.URL.Query().Get("sort")
+	authorID := r.URL.Query().Get("author_id")
+	var chirps []database.Chirp
+	var err error
+
+	if authorID != "" {
+		uuidAuthorID, err := uuid.Parse(authorID)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error": "Invalid author ID format"}`))
+			return
+		}
+		chirps, err = cfg.DB.GetAllChirps(r.Context(), uuidAuthorID)
+	} else {
+		chirps, err = cfg.DB.GetAllChirpsWithoutFilter(r.Context())
+	}
+
 	if err != nil {
+		fmt.Println("Error fetching chirps:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	sort.Slice(chirps, func(i, j int) bool {
+		if sortOrder != "desc" {
+			return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+		} else {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		}
+	})
 	var res []chirpResponse
 	for _, chirp := range chirps {
 		response := chirpResponse{

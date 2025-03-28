@@ -6,7 +6,11 @@ RETURNING *;
 -- name: GetAllChirps :many
 SELECT * 
 FROM chirps
+WHERE user_id = $1
 ORDER BY created_at ASC;
+
+-- name: GetAllChirpsWithoutFilter :many
+SELECT * FROM chirps;
 
 -- name: GetChirp :one
 SELECT *

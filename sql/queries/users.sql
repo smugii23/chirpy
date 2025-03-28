@@ -15,4 +15,10 @@ WHERE email = $1;
 UPDATE users
 SET email = $1, hashed_password = $2
 WHERE id = $3
-RETURNING id, email, created_at;
+RETURNING id, email, created_at, is_chirpy_red;
+
+-- name: MakeUserRed :one
+UPDATE users 
+SET is_chirpy_red = true
+WHERE id = $1
+RETURNING id, is_chirpy_red;

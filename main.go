@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -198,15 +199,17 @@ func (cfg *apiConfig) addUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userData := struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed.Valid && user.IsChirpyRed.Bool,
 	}
 	jsonData, err := json.Marshal(userData)
 	if err != nil {
@@ -438,6 +441,7 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}
 	lookup := users{
 		ID:           user.ID,
@@ -446,6 +450,7 @@ func (cfg *apiConfig) authenticateUser(w http.ResponseWriter, r *http.Request) {
 		Email:        user.Email,
 		Token:        token,
 		RefreshToken: refresh_token,
+		IsChirpyRed:  user.IsChirpyRed.Valid && user.IsChirpyRed.Bool,
 	}
 	jsonData, err := json.Marshal(lookup)
 	if err != nil {
@@ -573,15 +578,17 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type userResponse struct {
-		ID        uuid.UUID `json:"id"`
-		Email     string    `json:"email"`
-		CreatedAt time.Time `json:"created_at"`
+		ID          uuid.UUID `json:"id"`
+		Email       string    `json:"email"`
+		CreatedAt   time.Time `json:"created_at"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}
 
 	resp := userResponse{
-		ID:        user.ID,
-		Email:     user.Email,
-		CreatedAt: user.CreatedAt,
+		ID:          user.ID,
+		Email:       user.Email,
+		CreatedAt:   user.CreatedAt,
+		IsChirpyRed: user.IsChirpyRed.Valid && user.IsChirpyRed.Bool,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -636,6 +643,44 @@ func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
+	type requestData struct {
+		UserID string `json:"user_id"`
+	}
+
+	type request struct {
+		Event string      `json:"event"`
+		Data  requestData `json:"data"`
+	}
+	var user request
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&user)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if user.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	userUUID, err := uuid.Parse(user.Data.UserID)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "Invalid user ID format"}`))
+		return
+	}
+	_, err = cfg.DB.MakeUserRed(r.Context(), userUUID)
+	if errors.Is(err, sql.ErrNoRows) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func main() {
 	godotenv.Load()
 	secret := os.Getenv("SECRET")
@@ -671,6 +716,7 @@ func main() {
 	mux.HandleFunc("POST /api/revoke", apiCfg.revokeRefreshToken)
 	mux.HandleFunc("PUT /api/users", apiCfg.updateUser)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirp)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.upgradeUser)
 	server.ListenAndServe()
 }
 
